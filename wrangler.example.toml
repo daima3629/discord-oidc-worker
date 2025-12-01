@@ -1,0 +1,14 @@
+name = "discord-oidc"
+main = "worker.js"
+compatibility_date = "2025-12-02"
+
+kv_namespaces = [
+  { binding = "KV", id = "PASTE_ID_HERE", preview_id = "PASTE_PREVIEW_ID_HERE" }
+]
+
+[observability]
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
