@@ -111,7 +111,6 @@ app.post('/token', async (c) => {
 
 				roleClaims[`roles:${guildId}`] = memberJson.roles
 			}
-
 		}
 		))
 	}
@@ -123,6 +122,7 @@ app.post('/token', async (c) => {
 	}
 
 	let displayName = userInfo['global_name'] ?? userInfo['username']
+	const fakeEmail = `${userInfo['username']}@discord.local`
 
 	const idToken = await new jose.SignJWT({
 		iss: 'Discord OIDC Provider',
@@ -131,7 +131,7 @@ app.post('/token', async (c) => {
 		preferred_username,
 		...userInfo,
 		...roleClaims,
-		email: userInfo['email'],
+		email: fakeEmail,
 		global_name: userInfo['global_name'],
 		name: displayName,
 		guilds: servers
