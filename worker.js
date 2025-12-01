@@ -125,8 +125,9 @@ app.post('/token', async (c) => {
 	let displayName = userInfo['global_name'] ?? userInfo['username']
 
 	const idToken = await new jose.SignJWT({
-		iss: 'https://cloudflare.com',
+		iss: 'Discord OIDC Provider',
 		aud: config.clientId,
+		sub: userInfo['id'],
 		preferred_username,
 		...userInfo,
 		...roleClaims,
@@ -137,12 +138,11 @@ app.post('/token', async (c) => {
 	})
 		.setProtectedHeader({ alg: 'ES512' })
 		.setExpirationTime('1h')
-		.setAudience(config.clientId)
 		.sign((await loadOrGenerateKeyPair(c.env.KV)).privateKey)
 
 	return c.json({
 		...r,
-		scope: 'identify email',
+		scope: 'openid identify email',
 		id_token: idToken
 	})
 })
