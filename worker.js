@@ -3,15 +3,8 @@ import { Hono } from 'hono'
 import * as jose from 'jose'
 
 const algorithm = {
-	name: 'RSASSA-PKCS1-v1_5',
-	modulusLength: 2048,
-	publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
-	hash: { name: 'SHA-256' },
-}
-
-const importAlgo = {
-	name: 'RSASSA-PKCS1-v1_5',
-	hash: { name: 'SHA-256' },
+	name: 'ECDSA',
+	namedCurve: 'P-521',
 }
 
 async function loadOrGenerateKeyPair(KV) {
@@ -19,8 +12,8 @@ async function loadOrGenerateKeyPair(KV) {
 	let keyPairJson = await KV.get('keys', { type: 'json' })
 
 	if (keyPairJson !== null) {
-		keyPair.publicKey = await crypto.subtle.importKey('jwk', keyPairJson.publicKey, importAlgo, true, ['verify'])
-		keyPair.privateKey = await crypto.subtle.importKey('jwk', keyPairJson.privateKey, importAlgo, true, ['sign'])
+		keyPair.publicKey = await crypto.subtle.importKey('jwk', keyPairJson.publicKey, algorithm, true, ['verify'])
+		keyPair.privateKey = await crypto.subtle.importKey('jwk', keyPairJson.privateKey, algorithm, true, ['sign'])
 
 		return keyPair
 	} else {
@@ -142,7 +135,7 @@ app.post('/token', async (c) => {
 		name: displayName,
 		guilds: servers
 	})
-		.setProtectedHeader({ alg: 'RS256' })
+		.setProtectedHeader({ alg: 'ES512' })
 		.setExpirationTime('1h')
 		.setAudience(config.clientId)
 		.sign((await loadOrGenerateKeyPair(c.env.KV)).privateKey)
@@ -158,8 +151,8 @@ app.get('/jwks.json', async (c) => {
 	let publicKey = (await loadOrGenerateKeyPair(c.env.KV)).publicKey
 	return c.json({
 		keys: [{
-			alg: 'RS256',
-			kid: 'jwtRS256',
+			alg: 'ES512',
+			kid: 'jwtES512',
 			...(await crypto.subtle.exportKey('jwk', publicKey))
 		}]
 	})
