@@ -12,5 +12,10 @@
     "hono": "^4.10.7",
     "jose": "^6.1.2",
     "wrangler": "^4.51.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251202.0",
+    "discord-api-types": "^0.38.36",
+    "typescript": "^5.9.3"
   }
 }

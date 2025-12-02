@@ -1,0 +1,172 @@
+import * as config from './config.json'
+import { Hono } from 'hono'
+import * as jose from 'jose'
+import type { APIGuild, APIGuildMember, APIUser, RESTPostOAuth2AccessTokenResult } from 'discord-api-types/v10'
+
+const algorithm = {
+    name: 'ECDSA',
+    namedCurve: 'P-521',
+}
+
+type Bindings = {
+    KV: KVNamespace,
+    DISCORD_TOKEN: string
+}
+
+type StoredSigningKey = {
+    publicKey: JsonWebKey,
+    privateKey: JsonWebKey
+}
+
+async function loadOrGenerateKeyPair(KV: KVNamespace) {
+    const keyPairJson = await KV.get<StoredSigningKey>('keys', { type: 'json' })
+
+    if (keyPairJson !== null) {
+        const keyPair: CryptoKeyPair = {
+            publicKey: await crypto.subtle.importKey('jwk', keyPairJson.publicKey, algorithm, true, ['verify']),
+            privateKey: await crypto.subtle.importKey('jwk', keyPairJson.privateKey, algorithm, true, ['sign'])
+        }
+
+        return keyPair
+    } else {
+        const keyPair = await crypto.subtle.generateKey(algorithm, true, ['sign', 'verify'])
+
+        await KV.put('keys', JSON.stringify({
+            privateKey: await crypto.subtle.exportKey('jwk', keyPair.privateKey),
+            publicKey: await crypto.subtle.exportKey('jwk', keyPair.publicKey)
+        }))
+
+        return keyPair
+    }
+
+}
+
+const app = new Hono<{ Bindings: Bindings }>()
+
+app.get('/authorize/:scopemode', async (c) => {
+
+    if (c.req.query('client_id') !== config.clientId
+        || c.req.query('redirect_uri') !== config.redirectURL
+        || !['guilds', 'email'].includes(c.req.param('scopemode'))) {
+        return c.text('Bad request.', 400)
+    }
+    const params = new URLSearchParams({
+        'client_id': config.clientId,
+        'redirect_uri': config.redirectURL,
+        'response_type': 'code',
+        'scope': c.req.param('scopemode') == 'guilds' ? 'identify email guilds' : 'identify email',
+        'state': c.req.query('state') as string,
+        'prompt': 'none'
+    }).toString()
+
+    return c.redirect('https://discord.com/oauth2/authorize?' + params)
+})
+
+app.post('/token', async (c) => {
+    const body = await c.req.parseBody()
+    const code = body['code'] as string
+    const params = new URLSearchParams({
+        'client_id': config.clientId,
+        'client_secret': config.clientSecret,
+        'redirect_uri': config.redirectURL,
+        'code': code,
+        'grant_type': 'authorization_code',
+        'scope': 'identify email'
+    }).toString()
+
+    const r: RESTPostOAuth2AccessTokenResult = await fetch('https://discord.com/api/v10/oauth2/token', {
+        method: 'POST',
+        body: params,
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+    }).then(res => res.json())
+
+    if (r === null) return new Response("Bad request.", { status: 400 })
+    const userInfo: APIUser = await fetch('https://discord.com/api/v10/users/@me', {
+        headers: {
+            'Authorization': 'Bearer ' + r.access_token
+        }
+    }).then(res => res.json())
+
+    if (!userInfo.verified) return c.text('Bad request.', 400)
+
+    let servers: string[] = []
+
+    const serverResp = await fetch('https://discord.com/api/v10/users/@me/guilds', {
+        headers: {
+            'Authorization': 'Bearer ' + r['access_token']
+        }
+    })
+
+    if (serverResp.status === 200) {
+        const serverJson: Array<APIGuild> = await serverResp.json()
+        servers = serverJson.map(item => {
+            return item.id
+        })
+    }
+
+    let roleClaims: Record<string, string[]> = {}
+
+    if (c.env.DISCORD_TOKEN && 'serversToCheckRolesFor' in config) {
+        await Promise.all(config.serversToCheckRolesFor.map(async guildId => {
+            if (servers.includes(guildId)) {
+                let memberPromise = fetch(`https://discord.com/api/v10/guilds/${guildId}/members/${userInfo['id']}`, {
+                    headers: {
+                        'Authorization': 'Bot ' + c.env.DISCORD_TOKEN
+                    }
+                })
+                // i had issues doing this any other way?
+                const memberResp = await memberPromise
+                const memberJson: APIGuildMember = await memberResp.json()
+
+                roleClaims[`roles:${guildId}`] = memberJson.roles
+            }
+        }
+        ))
+    }
+
+    let preferred_username = userInfo['username']
+
+    if (userInfo['discriminator'] && userInfo['discriminator'] !== '0'){
+        preferred_username += `#${userInfo['discriminator']}`
+    }
+
+    let displayName = userInfo['global_name'] ?? userInfo['username']
+    const fakeEmail = `${userInfo['username']}@discord.local`
+
+    const idToken = await new jose.SignJWT({
+        iss: 'Discord OIDC Provider',
+        aud: config.clientId,
+        sub: userInfo['id'],
+        preferred_username,
+        ...userInfo,
+        ...roleClaims,
+        email: fakeEmail,
+        global_name: userInfo['global_name'],
+        name: displayName,
+        guilds: servers
+    })
+        .setProtectedHeader({ alg: 'ES512' })
+        .setExpirationTime('1h')
+        .sign((await loadOrGenerateKeyPair(c.env.KV)).privateKey)
+
+    return c.json({
+        ...r,
+        scope: 'openid identify email',
+        id_token: idToken
+    })
+})
+
+app.get('/jwks.json', async (c) => {
+    let publicKey = (await loadOrGenerateKeyPair(c.env.KV)).publicKey
+    return c.json({
+        keys: [{
+            alg: 'ES512',
+            kid: 'jwtES512',
+            ...(await crypto.subtle.exportKey('jwk', publicKey))
+        }]
+    })
+})
+
+export default app
